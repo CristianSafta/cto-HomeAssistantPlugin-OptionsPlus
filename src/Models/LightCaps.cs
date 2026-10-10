@@ -89,6 +89,8 @@ namespace Loupedeck.HomeAssistantPlugin
 
                         ctemp = attrs.TryGetProperty("min_mireds", out _) ||
                                 attrs.TryGetProperty("max_mireds", out _) ||
+                                attrs.TryGetProperty("min_color_temp_kelvin", out _) ||
+                                attrs.TryGetProperty("max_color_temp_kelvin", out _) ||
                                 attrs.TryGetProperty("color_temp", out _) ||
                                 attrs.TryGetProperty("color_temp_kelvin", out _);
 

@@ -250,6 +250,17 @@ namespace Loupedeck.HomeAssistantPlugin
                                 maxMireds = maxM.GetInt32();
                             }
 
+                            // New HA versions expose bounds in Kelvin; retain legacy
+                            // reads above for older servers and convert for our mired dial.
+                            if (attrs.TryGetProperty("max_color_temp_kelvin", out var maxK) && maxK.ValueKind == JsonValueKind.Number && maxK.TryGetInt32(out var maxKelvin) && maxKelvin > 0)
+                            {
+                                minMireds = ColorTemp.KelvinToMired(maxKelvin);
+                            }
+                            if (attrs.TryGetProperty("min_color_temp_kelvin", out var minK) && minK.ValueKind == JsonValueKind.Number && minK.TryGetInt32(out var minKelvin) && minKelvin > 0)
+                            {
+                                maxMireds = ColorTemp.KelvinToMired(minKelvin);
+                            }
+
                             // HS color (Hue/Saturation)
                             if (attrs.TryGetProperty("hs_color", out var hs) &&
                                 hs.ValueKind == JsonValueKind.Array && hs.GetArrayLength() >= HsColorArrayMinLength)

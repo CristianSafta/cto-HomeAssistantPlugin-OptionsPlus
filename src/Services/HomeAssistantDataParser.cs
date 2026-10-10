@@ -579,6 +579,17 @@ namespace Loupedeck.HomeAssistantPlugin.Services
                     maxM = v2.GetInt32();
                 }
 
+                // Kelvin bounds replace the legacy mired attributes. The order reverses
+                // because a higher Kelvin value corresponds to a lower mired value.
+                if (attrs.TryGetProperty("max_color_temp_kelvin", out var maxK) && maxK.ValueKind == JsonValueKind.Number && maxK.TryGetInt32(out var maxKelvin) && maxKelvin > 0)
+                {
+                    minM = ColorTemp.KelvinToMired(maxKelvin);
+                }
+                if (attrs.TryGetProperty("min_color_temp_kelvin", out var minK) && minK.ValueKind == JsonValueKind.Number && minK.TryGetInt32(out var minKelvin) && minKelvin > 0)
+                {
+                    maxM = ColorTemp.KelvinToMired(minKelvin);
+                }
+
                 if (attrs.TryGetProperty("color_temp", out var v3) && v3.ValueKind == JsonValueKind.Number)
                 {
                     curM = HSBHelper.Clamp(v3.GetInt32(), minM, maxM);

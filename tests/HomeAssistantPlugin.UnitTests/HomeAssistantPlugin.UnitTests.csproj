@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(HomeAssistantTargetFramework)' == ''">net8.0</TargetFramework>
+    <TargetFramework Condition="'$(HomeAssistantTargetFramework)' != ''">$(HomeAssistantTargetFramework)</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Loupedeck.HomeAssistantPlugin.Tests</RootNamespace>

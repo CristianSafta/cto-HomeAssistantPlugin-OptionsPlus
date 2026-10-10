@@ -748,9 +748,8 @@ namespace Loupedeck.HomeAssistantPlugin
             if (temperature.HasValue && individualCaps.ColorTemp)
             {
                 var kelvin = HSBHelper.Clamp(temperature.Value, MinTemperature, MaxTemperature);
-                var mired = ColorTemp.KelvinToMired(kelvin);
-                serviceData["color_temp"] = mired;
-                PluginLog.Info($"{LogPrefix} Added color temp for {entityId}: {kelvin}K -> {mired} mireds");
+                serviceData["color_temp_kelvin"] = kelvin;
+                PluginLog.Info($"{LogPrefix} Added color temp for {entityId}: {kelvin}K");
             }
             else if (temperature.HasValue && !individualCaps.ColorTemp)
             {
@@ -882,7 +881,7 @@ namespace Loupedeck.HomeAssistantPlugin
                         case "brightness":
                             brightnessData[kvp.Key] = kvp.Value;
                             break;
-                        case "color_temp":
+                        case "color_temp_kelvin":
                             tempData[kvp.Key] = kvp.Value;
                             break;
                         case "hs_color":

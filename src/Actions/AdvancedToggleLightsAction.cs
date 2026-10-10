@@ -684,13 +684,12 @@ namespace Loupedeck.HomeAssistantPlugin
             }
 
             // Add color controls - prioritize temperature over HS to avoid conflicts
-            // (HA doesn't allow both color_temp and hs_color in the same call)
+            // (HA doesn't allow both color_temp_kelvin and hs_color in the same call)
             if (temperature.HasValue && caps.ColorTemp)
             {
                 var kelvin = HSBHelper.Clamp(temperature.Value, MinTemperature, MaxTemperature);
-                var mired = ColorTemp.KelvinToMired(kelvin);
-                serviceData["color_temp"] = mired;
-                PluginLog.Info($"{LogPrefix} Added color temp: {temperature.Value}K -> {kelvin}K -> {mired} mireds (color temp takes priority over HS)");
+                serviceData["color_temp_kelvin"] = kelvin;
+                PluginLog.Info($"{LogPrefix} Added color temp: {temperature.Value}K -> {kelvin}K (color temp takes priority over HS)");
 
                 if (hue.HasValue || saturation.HasValue)
                 {
@@ -817,7 +816,7 @@ namespace Loupedeck.HomeAssistantPlugin
                         case "brightness":
                             brightnessData[kvp.Key] = kvp.Value;
                             break;
-                        case "color_temp":
+                        case "color_temp_kelvin":
                             tempData[kvp.Key] = kvp.Value;
                             break;
                         case "hs_color":
