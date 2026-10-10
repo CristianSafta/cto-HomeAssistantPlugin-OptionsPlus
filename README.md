@@ -126,8 +126,13 @@ Toggle one or more `switch.*` entities on/off via Home Assistant.
 Advanced multi-light control with comprehensive settings and capability-aware parameter management.
 
 * **Press** → intelligently toggles selected lights with smart parameter handling:
-  - **Lights ON with parameters** → turn OFF
-  - **Lights OFF** → turn ON with your configured parameters (brightness, color temperature, hue, saturation, white levels)
+  - **Every selected light is ON and matches the preset** → turn OFF
+  - **Any light is OFF or has different settings** → apply your configured parameters without turning the lights off first
+
+You can place separate warm and cold presets on two buttons and switch directly
+between them. Press the preset that is already active to turn the lights off.
+The action reads the current Home Assistant state on each press and compares only
+settings supported by each light, allowing small device rounding differences.
 
 **To configure:**
 

@@ -62,10 +62,17 @@ public class LightTemperatureActionTests
         var action = RuntimeHelpers.GetUninitializedObject(type);
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         type.GetField("_lightSvc", flags)!.SetValue(action, service);
-        type.GetField(areaAction ? "_areaLightsState" : "_advancedLightsState", flags)!.SetValue(action, true);
+        if (areaAction)
+        {
+            type.GetField("_areaLightsState", flags)!.SetValue(action, true);
+        }
 
-        var result = type.GetMethod("ProcessSingleLight", flags)!.Invoke(action,
-            new object?[] { "light.test", new LightCaps(false, true, supportsTemperature, false), 255, kelvin, null, null, null, null });
+        var parameters = new List<object?> { "light.test", new LightCaps(false, true, supportsTemperature, false), 255, kelvin, null, null, null, null };
+        if (!areaAction)
+        {
+            parameters.Add(true);
+        }
+        var result = type.GetMethod("ProcessSingleLight", flags)!.Invoke(action, parameters.ToArray());
         result.Should().Be(true);
         return calls;
     }

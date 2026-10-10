@@ -64,12 +64,6 @@ namespace Loupedeck.HomeAssistantPlugin
         private Boolean _disposed = false;
 
         /// <summary>
-        /// Simple toggle state for all selected lights. Defaults to false (off state).
-        /// This boolean alternates between true/false on each press, and all lights get the same command.
-        /// </summary>
-        private Boolean _advancedLightsState = false;
-
-        /// <summary>
         /// Control name for primary light selection dropdown.
         /// </summary>
         private const String ControlLights = "ha_lights";
@@ -193,7 +187,7 @@ namespace Loupedeck.HomeAssistantPlugin
             this.Name = "HomeAssistant.AdvancedToggleLights";
             this.DisplayName = "Advanced Toggle Lights";
             this.GroupName = "Lights";
-            this.Description = "Toggle multiple Home Assistant lights with advanced controls for brightness, color, and temperature. For rgbw and rgbww lights for white levels to be sent hue and saturation must also be provided.";
+            this.Description = "Apply brightness, color, and temperature presets to multiple lights. Turn off only when all selected lights already match the preset. For rgbw and rgbww white levels, hue and saturation must also be provided.";
 
             // Primary light selection (single)
             this.ActionEditor.AddControlEx(new ActionEditorListbox(ControlLights, "Primary Light(retry if empty)"));
@@ -422,7 +416,7 @@ namespace Loupedeck.HomeAssistantPlugin
         /// <summary>
         /// Executes the advanced toggle lights command with comprehensive light control.
         /// Processes multiple lights with brightness, color temperature, hue/saturation, and white level parameters.
-        /// Implements toggle behavior - if lights are on with parameters, turns them off; if off, turns on with parameters.
+        /// Applies the preset unless every light is already on with matching settings, in which case turns them off.
         /// </summary>
         /// <param name="ps">Action editor parameters containing user-configured values.</param>
         /// <returns><c>true</c> if all light operations succeeded; otherwise, <c>false</c>.</returns>
@@ -554,7 +548,7 @@ namespace Loupedeck.HomeAssistantPlugin
         /// <summary>
         /// Processes multiple lights with individual capability filtering.
         /// Key difference from common capabilities: each light uses its own maximum supported features.
-        /// Follows the successful AreaToggleLightsAction.ProcessAreaLights() pattern.
+        /// Turns the group off only when every selected light already matches the supported preset settings.
         /// </summary>
         /// <param name="entityIds">Collection of light entity IDs to process.</param>
         /// <param name="brightness">Brightness value (0-255) or null.</param>
@@ -567,24 +561,62 @@ namespace Loupedeck.HomeAssistantPlugin
         private Boolean ProcessLightsIndividually(IEnumerable<String> entityIds, Int32? brightness, Int32? temperature,
             Double? hue, Double? saturation, Int32? whiteLevel, Int32? coldWhiteLevel)
         {
-            // Toggle the advanced lights state before processing lights - all lights get the same command
-            this._advancedLightsState = !this._advancedLightsState;
-            PluginLog.Info($"{LogPrefix} Toggled advanced lights state to: {(this._advancedLightsState ? "ON" : "OFF")}");
+            if (this._dataService == null)
+            {
+                PluginLog.Error($"{LogPrefix} Cannot determine current light states: data service unavailable");
+                return false;
+            }
+
+            // Read the current HA state for each press. Different presets and changes
+            // made outside this plugin must participate in the toggle decision.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var (ok, json, error) = this._dataService.FetchStatesAsync(timeout.Token).GetAwaiter().GetResult();
+            if (!ok || String.IsNullOrWhiteSpace(json))
+            {
+                PluginLog.Warning($"{LogPrefix} Cannot determine current light states: {error}");
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(json);
+            var states = document.RootElement.EnumerateArray()
+                .Where(state => state.TryGetProperty("entity_id", out _))
+                .ToDictionary(state => state.GetProperty("entity_id").GetString()!, StringComparer.OrdinalIgnoreCase);
+            var targets = new List<(String EntityId, LightCaps Caps, Boolean Matches)>();
+            foreach (var entityId in entityIds.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!states.TryGetValue(entityId, out var state))
+                {
+                    PluginLog.Warning($"{LogPrefix} Cannot determine current state of {entityId}");
+                    return false;
+                }
+
+                var attrs = state.TryGetProperty("attributes", out var attributes) ? attributes : default;
+                var caps = LightCaps.FromAttributes(attrs);
+                var data = BuildServiceData(entityId, caps, brightness, temperature, hue, saturation, whiteLevel, coldWhiteLevel);
+                targets.Add((entityId, caps, LightPresetMatcher.Matches(state, JsonSerializer.SerializeToElement(data))));
+            }
+
+            if (targets.Count == 0)
+            {
+                return false;
+            }
+
+            var turnOn = !targets.All(target => target.Matches);
+            PluginLog.Info($"{LogPrefix} Current states {(turnOn ? "differ from preset: applying settings" : "match preset: turning lights off")}");
 
             var success = true;
 
-            foreach (var entityId in entityIds)
+            foreach (var target in targets)
             {
+                var entityId = target.EntityId;
                 try
                 {
-                    // Get INDIVIDUAL capabilities for this specific light (key change!)
-                    var individualCaps = this._lightStateManager?.GetCapabilities(entityId)
-                        ?? new LightCaps(true, false, false, false, null);
+                    var individualCaps = target.Caps;
 
                     PluginLog.Info($"{LogPrefix} Processing {entityId} with individual capabilities: OnOff={individualCaps.OnOff}, Brightness={individualCaps.Brightness}, ColorTemp={individualCaps.ColorTemp}, ColorHs={individualCaps.ColorHs}");
 
                     // Process this light with ITS OWN capabilities (not intersection)
-                    success &= this.ProcessSingleLight(entityId, individualCaps, brightness, temperature, hue, saturation, whiteLevel, coldWhiteLevel);
+                    success &= this.ProcessSingleLight(entityId, individualCaps, brightness, temperature, hue, saturation, whiteLevel, coldWhiteLevel, turnOn);
                 }
                 catch (Exception ex)
                 {
@@ -596,53 +628,10 @@ namespace Loupedeck.HomeAssistantPlugin
             return success;
         }
 
-        private Boolean ProcessSingleLight(String entityId, LightCaps caps, Int32? brightness, Int32? temperature,
+        private static Dictionary<String, Object> BuildServiceData(String entityId, LightCaps caps, Int32? brightness, Int32? temperature,
             Double? hue, Double? saturation, Int32? whiteLevel, Int32? coldWhiteLevel)
         {
-            PluginLog.Info($"{LogPrefix} Processing light: {entityId}");
-
-            // Use the individual capabilities passed in (no longer need fallback since caps are already individual)
             var preferredColorMode = caps.PreferredColorMode ?? "hs";
-
-            PluginLog.Info($"{LogPrefix} Light capabilities: onoff={caps.OnOff} brightness={caps.Brightness} colorTemp={caps.ColorTemp} colorHs={caps.ColorHs} preferredColorMode={preferredColorMode}");
-            PluginLog.Info($"{LogPrefix} Input parameters: brightness={brightness} temperature={temperature}K hue={hue}° saturation={saturation}% whiteLevel={whiteLevel} coldWhiteLevel={coldWhiteLevel}");
-
-            if (this._lightSvc == null)
-            {
-                PluginLog.Error($"{LogPrefix} ProcessSingleLight: LightControlService not available");
-                return false;
-            }
-
-            // Always use advanced lights state to determine on/off, regardless of parameters
-            PluginLog.Info($"{LogPrefix} Using advanced lights state to determine command: {(this._advancedLightsState ? "ON" : "OFF")}");
-
-            // Use simple advanced lights toggle state - all lights get the same command
-            if (!this._advancedLightsState)
-            {
-                PluginLog.Info($"{LogPrefix} Advanced lights state is OFF, turning OFF light {entityId}");
-                var success = this._lightSvc.TurnOffAsync(entityId).GetAwaiter().GetResult();
-                PluginLog.Info($"{LogPrefix} HA SERVICE CALL: turn_off entity_id={entityId} -> success={success}");
-
-                if (success && this._lightStateManager != null)
-                {
-                    // Update local state - light is now off
-                    this._lightStateManager.UpdateLightState(entityId, false);
-                    PluginLog.Info($"{LogPrefix} Updated local state: {entityId} turned OFF");
-                }
-
-                if (!success)
-                {
-                    var friendlyName = entityId; // Could be enhanced to get friendly name
-                    this.Plugin.OnPluginStatusChanged(PluginStatus.Error,
-                        $"Failed to turn off light {friendlyName}");
-                }
-
-                return success;
-            }
-
-            // Advanced lights state is ON, turn light ON with the specified parameters
-            PluginLog.Info($"{LogPrefix} Advanced lights state is ON, turning ON light {entityId} with parameters");
-
             // Build service call data based on available parameters and capabilities
             var serviceData = new Dictionary<String, Object>();
 
@@ -797,6 +786,53 @@ namespace Loupedeck.HomeAssistantPlugin
             {
                 PluginLog.Warning($"{LogPrefix} Hue/Saturation requested but not supported by {entityId}");
             }
+
+            return serviceData;
+        }
+
+        private Boolean ProcessSingleLight(String entityId, LightCaps caps, Int32? brightness, Int32? temperature,
+            Double? hue, Double? saturation, Int32? whiteLevel, Int32? coldWhiteLevel, Boolean turnOn)
+        {
+            PluginLog.Info($"{LogPrefix} Processing light: {entityId}");
+
+            // Use the individual capabilities passed in (no longer need fallback since caps are already individual)
+            var preferredColorMode = caps.PreferredColorMode ?? "hs";
+
+            PluginLog.Info($"{LogPrefix} Light capabilities: onoff={caps.OnOff} brightness={caps.Brightness} colorTemp={caps.ColorTemp} colorHs={caps.ColorHs} preferredColorMode={preferredColorMode}");
+            PluginLog.Info($"{LogPrefix} Input parameters: brightness={brightness} temperature={temperature}K hue={hue}° saturation={saturation}% whiteLevel={whiteLevel} coldWhiteLevel={coldWhiteLevel}");
+
+            if (this._lightSvc == null)
+            {
+                PluginLog.Error($"{LogPrefix} ProcessSingleLight: LightControlService not available");
+                return false;
+            }
+
+            if (!turnOn)
+            {
+                PluginLog.Info($"{LogPrefix} Preset already active, turning OFF light {entityId}");
+                var success = this._lightSvc.TurnOffAsync(entityId).GetAwaiter().GetResult();
+                PluginLog.Info($"{LogPrefix} HA SERVICE CALL: turn_off entity_id={entityId} -> success={success}");
+
+                if (success && this._lightStateManager != null)
+                {
+                    // Update local state - light is now off
+                    this._lightStateManager.UpdateLightState(entityId, false);
+                    PluginLog.Info($"{LogPrefix} Updated local state: {entityId} turned OFF");
+                }
+
+                if (!success)
+                {
+                    var friendlyName = entityId; // Could be enhanced to get friendly name
+                    this.Plugin.OnPluginStatusChanged(PluginStatus.Error,
+                        $"Failed to turn off light {friendlyName}");
+                }
+
+                return success;
+            }
+
+            PluginLog.Info($"{LogPrefix} Applying preset to light {entityId}");
+
+            var serviceData = BuildServiceData(entityId, caps, brightness, temperature, hue, saturation, whiteLevel, coldWhiteLevel);
 
             // FIXED: Send separate requests for better compatibility with WiZ and other lights
             var overallSuccess = true;
